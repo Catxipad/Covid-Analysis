@@ -1,0 +1,108 @@
+-- Creating tables on PGADMIN
+CREATE TABLE covid_deaths(iso_code varchar(50), continent varchar(50), location varchar(50), date date,	population double precision, total_cases double precision, new_cases double precision, new_cases_smoothed numeric, total_deaths double precision,	new_deaths double precision, new_deaths_smoothed numeric, total_cases_per_million numeric, new_cases_per_million numeric, new_cases_smoothed_per_million numeric, total_deaths_per_million numeric, new_deaths_per_million numeric, new_deaths_smoothed_per_million numeric, reproduction_rate numeric, icu_patients double precision, icu_patients_per_million numeric, hosp_patients double precision, hosp_patients_per_million numeric,	weekly_icu_admissions double precision, weekly_icu_admissions_per_million numeric, weekly_hosp_admissions double precision, weekly_hosp_admissions_per_million numeric);
+
+CREATE TABLE covid_vaccinations(iso_code varchar(50), continent varchar(50), location varchar(50), date date, total_tests double precision, new_tests double precision, total_tests_per_thousand numeric, new_tests_per_thousand numeric, new_tests_smoothed double precision, new_tests_smoothed_per_thousand numeric,	positive_rate numeric,	tests_per_case numeric, tests_units varchar(50),total_vaccinations double precision, people_vaccinated double precision, people_fully_vaccinated double precision, total_boosters double precision, new_vaccinations double precision, new_vaccinations_smoothed double precision, total_vaccinations_per_hundred numeric, people_vaccinated_per_hundred numeric, people_fully_vaccinated_per_hundred numeric, total_boosters_per_hundred numeric, new_vaccinations_smoothed_per_million double precision, new_people_vaccinated_smoothed double precision, new_people_vaccinated_smoothed_per_hundred numeric, stringency_index	numeric, population_density numeric, median_age numeric, aged_65_older numeric, aged_70_older numeric, gdp_per_capita numeric, extreme_poverty numeric, cardiovasc_death_rate numeric, diabetes_prevalence numeric, female_smokers numeric, male_smokers float, handwashing_facilities numeric, hospital_beds_per_thousand numeric, life_expectancy numeric, human_development_index numeric, excess_mortality_cumulative_absolute numeric, excess_mortality_cumulative numeric, excess_mortality numeric, excess_mortality_cumulative_per_million numeric);
+
+SELECT *
+FROM public.covid_vaccinations;
+
+SELECT *
+FROM covid_deaths
+WHERE continent IS NOT NULL;
+
+-- Total cases vs total deaths
+-- Likelihood of death if you contract covid by percentage
+-- Double precision columns cast as numeric and rounded to two decimal places
+SELECT location, date, total_cases, total_deaths, ROUND(((total_deaths/total_cases)*100):: numeric ,2) AS death_percentage
+FROM public.covid_deaths
+WHERE location ilike '%states%'
+ORDER by 1, 2;
+
+-- Total cases vs population
+-- What percentage of the population contracted Covid
+SELECT location, date, population, total_cases, ROUND(((total_cases/population)*100)::numeric,2) AS covid_pos_percentage
+FROM public.covid_deaths
+WHERE location ilike '%states%'
+ORDER by 1, 2;
+
+-- Which countries have the highest infection rates compared to population
+SELECT location, population, MAX(total_cases) AS highest_infection_count, ROUND(((MAX(total_cases/population)*100))::numeric,2) AS percent_population_infected
+FROM public.covid_deaths
+-- WHERE location ilike '%states%'
+WHERE continent IS NOT NULL
+GROUP BY 1, 2
+ORDER by 4 DESC;
+
+-- Countries with the highest death count per population
+-- Locations are mixed with continent, so we have to remove null continents
+SELECT location, MAX((total_deaths)::int) AS total_death_count
+FROM public.covid_deaths
+-- WHERE location ilike '%states%'
+WHERE continent IS NOT NULL AND total_deaths IS NOT NULL
+GROUP BY 1
+ORDER by 2 DESC;
+
+
+-- Continents with highest death counts per population
+SELECT continent, MAX((total_deaths)::int) AS total_death_count
+FROM public.covid_deaths
+-- WHERE location ilike '%states%'
+WHERE continent IS NOT NULL AND total_deaths IS NOT NULL AND location NOT LIKE '%income%'
+GROUP BY 1
+ORDER by 2 DESC;
+
+-- -- BY Location
+SELECT location, MAX((total_deaths)::int) AS total_death_count
+FROM public.covid_deaths
+-- WHERE location ilike '%states%'
+WHERE continent IS NULL AND total_deaths IS NOT NULL AND location NOT LIKE '%income%'
+GROUP BY 1
+ORDER by 2 DESC;
+
+-- Global Numbers
+SELECT SUM(new_cases) as total_new_cases
+    , SUM(new_deaths) :: int as total_new_deaths
+--     ,COALESCE(((nullif(new_deaths,0)/nullif(new_cases,0)*100)),0)
+     
+FROM public.covid_deaths
+WHERE continent IS NOT NULL
+ORDER by 1, 2;
+
+
+-- Looking at total population vs vaccinations
+-- New vaccinations per day
+-- Over-Partition BY will make a rolling total- restarts for each location and date
+SELECT cd.continent, cd.location, cd.date, cd.population, cv.new_vaccinations
+,SUM(CAST(cv.new_vaccinations as int)) OVER (PARTITION BY cd.location ORDER BY cd.location, cd.date) AS rolling_total_people_vaccinated
+FROM covid_deaths cd
+JOIN covid_vaccinations cv
+    ON cd.location = cv.location
+    AND cd.date = cv.date
+WHERE cd.continent IS NOT NULL
+ORDER BY 2, 3
+
+
+-- USE CTE
+
+WITH pop_vs_vac (continent, location, date, population, new_vaccinations, rolling_total_people_vaccinated)
+as
+(SELECT cd.continent, cd.location, cd.date, cd.population, cv.new_vaccinations
+,SUM(CAST(cv.new_vaccinations as int)) OVER (PARTITION BY cd.location ORDER BY cd.location, cd.date) AS rolling_total_people_vaccinated
+FROM covid_deaths cd
+JOIN covid_vaccinations cv
+    ON cd.location = cv.location
+    AND cd.date = cv.date
+WHERE cd.continent IS NOT NULL)
+SELECT *, ROUND(((rolling_total_people_vaccinated/population)*100):: numeric,2)
+FROM pop_vs_vac
+-- ORDER BY 2, 3)
+
+-- View to store data for tableau
+CREATE VIEW percent_population_vaccinated AS
+SELECT cd.continent, cd.location, cd.date, cd.population, cv.new_vaccinations
+,SUM(CAST(cv.new_vaccinations as int)) OVER (PARTITION BY cd.location ORDER BY cd.location, cd.date) AS rolling_total_people_vaccinated
+FROM covid_deaths cd
+JOIN covid_vaccinations cv
+    ON cd.location = cv.location
+    AND cd.date = cv.date
+WHERE cd.continent IS NOT NULL
